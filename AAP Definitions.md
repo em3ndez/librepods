@@ -403,3 +403,25 @@ Once tracking is active, the AirPods stream sensor packets with the following co
 | orientation 3            | 47     | 2              |
 | Horizontal Acceleration  | 51     | 2              |
 | Vertical Acceleration    | 53     | 2              |
+
+## Heart Rate
+
+## Start
+
+```
+0400 0400 1700 0000 1000 1200 08D4 4510 0242 0B08 5310 021A 0501 4042 0F00
+```
+
+## Example
+
+```
+0400 0400 1700 0000 1000 1D00 08B8 0110  033A 1608 131A 1201 63ED AA00 0110 1F5F BE69 3A00 0000 1000 00
+```
+
+The 25th byte, `0x63` in this example, is the heart rate.
+
+## Stop
+
+```
+0400 0400 1700 0000 1000 1200 08D5 4510 0242 0B08 5310 021A 0501 0000 0000
+```
