@@ -20,23 +20,29 @@ package me.kavishdevar.librepods.utils
 
 import android.content.SharedPreferences
 import android.os.Build
+import androidx.core.content.edit
 
 fun isSupported(sharedPreferences: SharedPreferences): Boolean {
+    if (Build.VERSION.SDK_INT >= 37) return true
+
+    val isBypassFlagActive = sharedPreferences.getBoolean("bypass_device_check.v2", false)
+    if (isBypassFlagActive) return true
+
     val isPixel = Build.MANUFACTURER.lowercase() == "google"
-    val isOppoOrOnePlus = Build.MANUFACTURER.lowercase() in listOf("oneplus", "oppo")
+    val isOppoFamily = Build.MANUFACTURER.lowercase() in listOf("oneplus", "oppo", "realme")
 
-    if (isPixel) {
-        when (Build.VERSION.SDK_INT) {
-            36 -> {
-                return Build.ID == "CP1A.260305.018" || Build.ID == "CP1A.260405.005"
-            }
-
-            37 -> {
-                return true
-            }
-        }
-    } else if (isOppoOrOnePlus) {
+    if (isPixel && Build.VERSION.SDK_INT == 36) {
+        return Build.ID.startsWith("CP1A")
+    } else if (isOppoFamily) {
         return Build.VERSION.SDK_INT >= 36
     }
-    return sharedPreferences.getBoolean("bypass_device_check.v2", false)
+    return false
+}
+
+fun bypassDeviceCheck(sharedPreferences: SharedPreferences) {
+    sharedPreferences.edit{ putBoolean("bypass_device_check.v2", true) }
+}
+
+fun removeDeviceCheckBypass(sharedPreferences: SharedPreferences) {
+    sharedPreferences.edit{ putBoolean("bypass_device_check.v2", false) }
 }

@@ -1,6 +1,6 @@
 import java.util.Properties
 
-val versionName = "0.2.3"
+val appVersionName = "1.0.0-rc2"
 
 plugins {
     alias(libs.plugins.android.application)
@@ -10,17 +10,37 @@ plugins {
     id("kotlin-parcelize")
 }
 
+val localPropsFile = rootProject.file("local.properties")
 val props = Properties().apply {
-    load(rootProject.file("local.properties").inputStream())
+    if (localPropsFile.exists()) {
+        load(localPropsFile.inputStream())
+    }
+}
+
+val releaseSigningAvailable = listOf(
+    "RELEASE_STORE_FILE",
+    "RELEASE_STORE_PASSWORD",
+    "RELEASE_KEY_ALIAS",
+    "RELEASE_KEY_PASSWORD"
+).all { props[it]?.toString()?.isNotBlank() == true }
+
+kotlin {
+    compilerOptions {
+        optIn.add(
+            "androidx.compose.material3.ExperimentalMaterial3ExpressiveApi"
+        )
+    }
 }
 
 android {
     signingConfigs {
-        create("release") {
-            storeFile = file(props["RELEASE_STORE_FILE"] as String)
-            storePassword = props["RELEASE_STORE_PASSWORD"] as String
-            keyAlias = props["RELEASE_KEY_ALIAS"] as String
-            keyPassword = props["RELEASE_KEY_PASSWORD"] as String
+        if (releaseSigningAvailable) {
+            create("release") {
+                storeFile = file(props["RELEASE_STORE_FILE"] as String)
+                storePassword = props["RELEASE_STORE_PASSWORD"] as String
+                keyAlias = props["RELEASE_KEY_ALIAS"] as String
+                keyPassword = props["RELEASE_KEY_PASSWORD"] as String
+            }
         }
     }
     namespace = "me.kavishdevar.librepods"
@@ -28,10 +48,9 @@ android {
 
     defaultConfig {
         applicationId = "me.kavishdevar.librepods"
-        minSdk = 33
         targetSdk = 37
-        versionCode = 38
-        versionName = versionName
+        versionCode = 63
+        versionName = appVersionName
     }
     buildTypes {
         release {
@@ -45,23 +64,33 @@ android {
                     arguments += "-DCMAKE_BUILD_TYPE=Release"
                 }
             }
-            buildConfigField("Boolean", "PLAY_BUILD", "false")
-            signingConfig = signingConfigs.getByName("release")
+            if (releaseSigningAvailable) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            defaultConfig {
+                minSdk = 33
+            }
         }
         debug {
-            buildConfigField("Boolean", "PLAY_BUILD", "false")
-            signingConfig = signingConfigs.getByName("release")
+            if (releaseSigningAvailable) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             versionNameSuffix = "-debug"
+            defaultConfig {
+                minSdk = 33
+            }
         }
-        create("playRelease") {
-            initWith(getByName("release"))
+    }
+    productFlavors {
+        create("foss") {
+            dimension = "env"
+            buildConfigField("Boolean", "PLAY_BUILD", "false")
+        }
+        create("play") {
+            dimension = "env"
             buildConfigField("Boolean", "PLAY_BUILD", "true")
             versionNameSuffix = "-play"
-        }
-        create("playDebug") {
-            initWith(getByName("debug"))
-            buildConfigField("Boolean", "PLAY_BUILD", "true")
-            versionNameSuffix = "-youshouldnothavethis"
+            minSdk = 36
         }
     }
     compileOptions {
@@ -91,30 +120,12 @@ android {
     ndkVersion = "30.0.14904198"
 
     flavorDimensions += "env"
-
-    productFlavors {
-        create("normal") {
-            dimension = "env"
-            externalNativeBuild {
-                cmake {
-                    arguments += "-DIS_XPOSED=OFF"
-                }
-            }
-        }
-        create("xposed") {
-            dimension = "env"
-            externalNativeBuild {
-                cmake {
-                    arguments += "-DIS_XPOSED=ON"
-                }
-            }
-        }
-    }
 }
 
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.accompanist.permissions)
+    implementation(libs.androidx.compose.ui.text.google.fonts)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -139,9 +150,14 @@ dependencies {
     implementation(libs.backdrop)
 //    implementation(libs.hilt)
 //    implementation(libs.hilt.compiler)
-    add("xposedCompileOnly", libs.libxposed.api)
-    add("xposedImplementation", libs.libxposed.service)
-    add("playReleaseImplementation", libs.billing)
+    compileOnly(libs.libxposed.api)
+    implementation(libs.libxposed.service)
+    implementation(libs.play.review)
+    implementation(libs.play.review.ktx)
+    implementation(libs.androidx.navigation3.ui)
+    implementation(libs.androidx.navigation3.runtime)
+    implementation(libs.androidx.lifecycle.viewmodel.navigation3)
+    implementation(libs.androidx.navigationevent)
 }
 
 aboutLibraries {
@@ -177,19 +193,21 @@ fun registerRootModuleZipTask(
         rename { "LibrePods.apk" }
     }
 
-    archiveFileName.set("LibrePods-FOSS-v$versionName-$buildType.zip")
+    delete(layout.buildDirectory.dir("outputs/rootModuleZips"))
+
+    archiveFileName.set("LibrePods-FOSS-v$appVersionName-$buildType.zip")
     destinationDirectory.set(layout.buildDirectory.dir("outputs/rootModuleZips"))
 }
 
 val zipRelease = registerRootModuleZipTask(
-    "zipXposedReleaseModule",
-    "xposed",
+    "zipReleaseModule",
+    "foss",
     "release"
 )
 
 val zipDebug = registerRootModuleZipTask(
-    "zipXposedDebugModule",
-    "xposed",
+    "zipDebugModule",
+    "foss",
     "debug"
 )
 
@@ -198,22 +216,22 @@ val collect = tasks.register<Copy>("collectReleaseArtifacts") {
     dependsOn(
         zipRelease,
         zipDebug,
-        "bundleXposedPlayRelease"
+        "bundlePlayRelease"
     )
 
     into(releaseDir)
 
-    from(layout.buildDirectory.dir("outputs/apk/xposed/release")) {
+    from(layout.buildDirectory.dir("outputs/apk/foss/release")) {
         include("*.apk")
-        rename(".*", "LibrePods-FOSS-v$versionName-release.apk")
+        rename(".*", "LibrePods-FOSS-v$appVersionName-release.apk")
     }
 
-    from(layout.buildDirectory.dir("outputs/apk/xposed/debug")) {
+    from(layout.buildDirectory.dir("outputs/apk/foss/debug")) {
         include("*.apk")
-        rename(".*", "LibrePods-FOSS-v$versionName-debug.apk")
+        rename(".*", "LibrePods-FOSS-v$appVersionName-debug.apk")
     }
 
-    from(layout.buildDirectory.dir("outputs/bundle/xposedPlayRelease")) {
+    from(layout.buildDirectory.dir("outputs/bundle/playRelease")) {
         include("*.aab")
     }
 

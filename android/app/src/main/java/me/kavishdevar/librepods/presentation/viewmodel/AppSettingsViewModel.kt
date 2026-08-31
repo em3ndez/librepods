@@ -13,7 +13,6 @@ import kotlinx.coroutines.launch
 import me.kavishdevar.librepods.BuildConfig
 import me.kavishdevar.librepods.billing.BillingManager
 import me.kavishdevar.librepods.data.XposedRemotePrefProvider
-import me.kavishdevar.librepods.utils.NativeBridge
 import kotlin.math.roundToInt
 
 data class AppSettingsUiState(
@@ -34,7 +33,11 @@ data class AppSettingsUiState(
     val cameraPackageError: String? = null,
     val vendorIdHook: Boolean = false,
     val isPremium: Boolean = false,
-    val connectionSuccessful: Boolean = false
+    val connectionSuccessful: Boolean = false,
+    val showBottomSheetPopup: Boolean = true,
+    val showIslandPopup: Boolean = true,
+    val timeUntilFOSSPremiumExpiry: Long = 0L,
+    val m3eEnabled: Boolean = false
 )
 
 class AppSettingsViewModel(application: Application) : AndroidViewModel(application) {
@@ -60,18 +63,76 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
 
     override fun onCleared() {
         sharedPreferences.unregisterOnSharedPreferenceChangeListener(sharedPrefListener)
-        super.onCleared()
     }
 
     private fun observeBilling() {
         viewModelScope.launch {
             BillingManager.provider.isPremium.collect { premium ->
-                _uiState.update { it.copy(isPremium = premium) }
+                if (premium) {
+                    sharedPreferences.edit {
+                        remove("premium_expiry_time")
+                        if (BuildConfig.PLAY_BUILD) remove("foss_upgraded")
+                    }
+                    _uiState.update { it.copy(isPremium = true, timeUntilFOSSPremiumExpiry = 0L) }
+                } else {
+                    // No billing premium, only update if no temporary premium is active
+                    if (_uiState.value.timeUntilFOSSPremiumExpiry <= 0L) {
+                        _uiState.update { it.copy(isPremium = false) }
+                    }
+                }
             }
         }
     }
 
     private fun loadSettings() {
+        // faulty update on Play caused PLAY_BUILD to be false and resulted in use of FOSS billing in Play. since FOSS is not verified, we need to give 2 weeks to verify the purchase
+
+        val fossUpgraded = sharedPreferences.getBoolean("foss_upgraded", false)
+        val expiryTime = sharedPreferences.getLong("premium_expiry_time", 0L)
+        val now = System.currentTimeMillis()
+
+        when {
+            // existing temporary premium
+            expiryTime > 0L -> {
+                if (expiryTime <= now) {
+                    sharedPreferences.edit {
+                        remove("premium_expiry_time")
+                        remove("foss_upgraded")
+                    }
+
+                    _uiState.update {
+                        it.copy(
+                            timeUntilFOSSPremiumExpiry = 0L,
+                            isPremium = false
+                        )
+                    }
+                } else {
+                    _uiState.update {
+                        it.copy(
+                            timeUntilFOSSPremiumExpiry = expiryTime - now,
+                            isPremium = true
+                        )
+                    }
+                }
+            }
+
+            // First migration from accidental FOSS Play build
+            fossUpgraded && !_uiState.value.isPremium && BuildConfig.PLAY_BUILD -> {
+                val newExpiry = now + 28L * 24 * 60 * 60 * 1000
+
+                sharedPreferences.edit {
+                    putLong("premium_expiry_time", newExpiry)
+                }
+
+                _uiState.update {
+                    it.copy(
+                        timeUntilFOSSPremiumExpiry = newExpiry - now,
+                        isPremium = true
+                    )
+                }
+            }
+        }
+
         _uiState.update { currentState ->
             currentState.copy(
                 showPhoneBatteryInWidget = sharedPreferences.getBoolean("show_phone_battery_in_widget", false),
@@ -88,11 +149,11 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
                 conversationalAwarenessVolume = sharedPreferences.getInt("conversational_awareness_volume", 43).toFloat(),
                 cameraPackageValue = sharedPreferences.getString("custom_camera_package", "") ?: "",
                 vendorIdHook = xposedRemotePref.getBoolean("vendor_id_hook", false),
-                connectionSuccessful = sharedPreferences.getBoolean("connection_successful", false)
+                connectionSuccessful = sharedPreferences.getBoolean("connection_successful", false),
+                showBottomSheetPopup = sharedPreferences.getBoolean("show_bottom_sheet_popup", true),
+                showIslandPopup = sharedPreferences.getBoolean("show_island_popup", true),
+                m3eEnabled = sharedPreferences.getBoolean("m3e_enabled", true)
             )
-        }
-        if (BuildConfig.FLAVOR == "xposed") {
-            NativeBridge.setSdpHook(_uiState.value.vendorIdHook)
         }
     }
 
@@ -178,8 +239,22 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun setVendorIdHook(enabled: Boolean) {
-        NativeBridge.setSdpHook(enabled)
         xposedRemotePref.putBoolean("vendor_id_hook", enabled)
         _uiState.update { it.copy(vendorIdHook = enabled) }
+    }
+
+    fun setShowBottomSheetPopup(enabled: Boolean) {
+        sharedPreferences.edit { putBoolean("show_bottom_sheet_popup", enabled) }
+        _uiState.update { it.copy(showBottomSheetPopup = enabled) }
+    }
+
+    fun setShowIslandPopup(enabled: Boolean) {
+        sharedPreferences.edit { putBoolean("show_island_popup", enabled) }
+        _uiState.update { it.copy(showIslandPopup = enabled) }
+    }
+
+    fun setm3eEnabled(enabled: Boolean) {
+        sharedPreferences.edit { putBoolean("m3e_enabled", enabled) }
+        _uiState.update { it.copy(m3eEnabled = enabled) }
     }
 }
